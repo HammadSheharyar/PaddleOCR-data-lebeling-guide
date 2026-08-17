@@ -8,4 +8,4 @@
 
 # create separate conda enviremnent , python 3.11 or more
 # activate
-# install dependices , and paddle leble tool
+# install dependices , and paddle lable tool
