@@ -6,6 +6,67 @@
 # save the labels for det model training and save the rec result
 # the bbox will text doc, and rec will be 2 cropped images saved along with text doc for results
 
-# create separate conda enviremnent , python 3.11 or more
+# create separate conda enviremnent , python >= 3.11.15 
 # activate
 # install dependices , and paddle lable tool
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
