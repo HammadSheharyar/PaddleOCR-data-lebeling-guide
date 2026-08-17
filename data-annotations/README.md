@@ -338,11 +338,12 @@ we edit models files
 import modelscope
 
 # after
+ms_hub_errors = None
+
 try:
     import modelscope
-except ImportError:
+except Exception:
     modelscope = None
-
 
  notepad "E:\anaconda3\envs\yolo_cpu\Lib\site-packages\paddlex\inference\utils\official_models.py"
 
@@ -359,7 +360,13 @@ open in vscode
 
 code "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddlex\inference\utils\official_models.py"
 
+$env:QT_QPA_PLATFORM_PLUGIN_PATH="C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\PyQt5\Qt5\plugins"
 
+
+RuntimeError: A dependency error occurred during pipeline creation. Please refer to the installation documentation to ensure all required dependencies are installed.
+(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations\dataset-2026> python -c "import paddlex; print(paddlex.__version__)"
+3.7.2
+(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations\dataset-2026> pip install "paddlex[ocr]==3.7.2"
 
 
 
