@@ -10,8 +10,13 @@
 # activate
 # install dependices , and paddle lable tool
 
+conda activate yolo_gemma
 
 
+python --version
+
+ <!-- bcz we have gpu-->
+pip install paddlepaddle-gpu
 
 
 
