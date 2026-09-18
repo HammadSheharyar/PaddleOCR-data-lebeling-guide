@@ -1,418 +1,790 @@
-## CPU Version Guide for labelling Cropped BIB images with PaddleOCR Label, using PPOCRv5det and korean_ppocrv5_rec models
+# PaddleOCR / PPOCRLabel BIB Annotation Guide (Windows, CPU)
 
-# ist install all dependinces and models, run both det and extraction models, 
-# it will run draw bboxes and extract all text present in the image, 
-# we need to manually remove the extra bbox and text extracted , only leave bib number and korean/english name
-# save the labels for det model training and save the rec result
-# the bbox will text doc, and rec will be 2 cropped images saved along with text doc for results
+A practical setup and troubleshooting guide for labeling **cropped race BIB images** with **PPOCRLabel**, using PaddleOCR detection and Korean/English text recognition.
 
-# create separate conda enviremnent , python >= 3.11.15 
-# activate
-# install dependices , and paddle lable tool
+> This README is based on the setup and errors encountered during the actual Windows installation. The target machine has an older NVIDIA GPU that is not usable with the current PaddlePaddle GPU package, so this workflow intentionally uses **CPU inference**.
 
-conda activate yolo_gemma
+---
 
+## 1. Goal
 
+The annotation workflow is:
+
+```text
+Cropped BIB images
+       |
+       v
+PPOCRLabel + PaddleOCR
+       |
+       +--> Text Detection: draw/detect text bounding boxes
+       |
+       +--> Text Recognition: recognize BIB number + Korean/English name
+       |
+       v
+Manual cleanup
+       |
+       +--> Delete unrelated/incorrect text boxes
+       +--> Keep only the BIB number and athlete name
+       |
+       v
+Save annotations
+       |
+       +--> Detection labels
+       +--> Recognition crops + recognition text labels
+```
+
+The important manual step is to remove extra OCR detections and keep only the required **BIB number** and **Korean/English name**. The detection labels can later be used for text-detection training, while recognition crops and text labels can be used for recognition-model training.
+
+---
+
+## 2. Tested Environment
+
+This setup used:
+
+- Windows
+- Conda / Miniconda
+- Python 3.11
+- PaddlePaddle 3.3.1 (CPU)
+- PaddleOCR 3.7.0
+- PaddleX 3.7.2
+- PPOCRLabel
+- CUDA Toolkit 12.6 installed on the PC, but Paddle runs on CPU in this environment
+
+The original environment name was:
+
+```powershell
+yolo_gemma
+```
+
+You can use a cleaner dedicated environment name such as `paddle_label_cpu`.
+
+---
+
+## 3. Create a Clean Conda Environment
+
+A separate environment is strongly recommended because PPOCRLabel, PaddleOCR, PaddleX, PyQt, ModelScope, Torch, and other packages can conflict with packages from unrelated projects.
+
+```powershell
+conda create -n paddle_label_cpu python=3.11 -y
+conda activate paddle_label_cpu
+```
+
+Verify:
+
+```powershell
 python --version
+where python
+pip --version
+```
 
- <!-- bcz we have gpu-->
-pip install paddlepaddle-gpu
+The Python and pip paths should point to the same Conda environment.
 
+---
 
-gpu version can not work here bcz this is old gpu, compute 5.0, so we downloa the cpu
+## 4. Install PaddlePaddle
 
-https://www.paddlepaddle.org.cn/packages/stable/cu126/paddlepaddle-gpu/?utm_source=chatgpt.com
-paddlepaddle-3.3.1-cp311-cp311-win_amd64.whl
+### CPU installation
 
-pip install paddlepaddle-3.3.1-cp311-cp311-win_amd64.whl
+For the machine used in this project, the GPU path was abandoned because the installed NVIDIA GPU is too old for the required PaddlePaddle GPU build.
 
+Install CPU PaddlePaddle:
+
+```powershell
+pip install paddlepaddle==3.3.1
+```
+
+If you already downloaded the Windows wheel locally:
+
+```powershell
+pip install .\paddlepaddle-3.3.1-cp311-cp311-win_amd64.whl
+```
+
+Verify the installation:
+
+```powershell
 python -c "import paddle; print(paddle.__version__)"
+```
+
+Expected version:
+
+```text
 3.3.1
+```
 
+Run Paddle's built-in check:
 
-
-# Install PaddleOCR
-pip install paddleocr
-
-
-
+```powershell
 python -c "import paddle; paddle.utils.run_check()"
-INFO: Could not find files for the given pattern(s).
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
-  warnings.warn(warning_message)
-Running verify PaddlePaddle program ...
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\pir\math_op_patch.py:241: UserWarning: Tensor do not have 'place' interface for pir graph mode, try not to use it. None will be returned.
-  warnings.warn(
-I0817 16:29:30.281266   608 pir_interpreter.cc:1529] New Executor is Running ...
-I0817 16:29:30.285408   608 pir_interpreter.cc:1552] pir interpreter is running by multi-thread mode ...
+```
+
+A successful CPU setup should end with output similar to:
+
+```text
 PaddlePaddle works well on 1 CPU.
-PaddlePaddle is installed successfully! Let's start deep learning with PaddlePaddle now.
+PaddlePaddle is installed successfully!
+```
 
+Check the active device:
 
-python -c "import paddle; print(paddle.__version__); print(paddle.device.is_compiled_with_cuda()); print(paddle.device.get_device())"
-INFO: Could not find files for the given pattern(s).
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
-  warnings.warn(warning_message)
-3.3.1
+```powershell
+python -c "import paddle; print('Version:', paddle.__version__); print('CUDA build:', paddle.device.is_compiled_with_cuda()); print('Device:', paddle.device.get_device())"
+```
+
+For this CPU setup, the important result is:
+
+```text
+CUDA build: False
+Device: cpu
+```
+
+### Important: CUDA installed does NOT mean Paddle is using CUDA
+
+The machine can still show CUDA Toolkit 12.6:
+
+```powershell
+nvcc --version
+```
+
+while Paddle reports:
+
+```text
 False
 cpu
+```
 
+These are not contradictory. `nvcc` only proves that the CUDA toolkit is installed. Paddle must also have a compatible GPU build and the GPU itself must satisfy the supported compute capability.
 
+---
 
+## 5. Install PaddleOCR
 
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations> pip install "paddlepaddle-3.3.1-cp311-cp311-win_amd64.whl"
-Processing .\paddlepaddle-3.3.1-cp311-cp311-win_amd64.whl
-Collecting httpx (from paddlepaddle==3.3.1)
-  Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
-Requirement already satisfied: numpy>=1.21 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlepaddle==3.3.1) (2.4.4)
-Collecting protobuf>=3.20.2 (from paddlepaddle==3.3.1)
-  Using cached protobuf-7.35.1-cp310-abi3-win_amd64.whl.metadata (595 bytes)
-Requirement already satisfied: Pillow in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlepaddle==3.3.1) (12.2.0)
-Collecting opt-einsum==3.3.0 (from paddlepaddle==3.3.1)
-  Using cached opt_einsum-3.3.0-py3-none-any.whl.metadata (6.5 kB)
-Requirement already satisfied: networkx in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlepaddle==3.3.1) (3.6.1)
-Requirement already satisfied: typing-extensions in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlepaddle==3.3.1) (4.15.0)
-Collecting safetensors>=0.6.0 (from paddlepaddle==3.3.1)
-  Downloading safetensors-0.8.0-cp310-abi3-win_amd64.whl.metadata (4.2 kB)
-Collecting anyio (from httpx->paddlepaddle==3.3.1)
-  Using cached anyio-4.14.2-py3-none-any.whl.metadata (4.6 kB)
-Requirement already satisfied: certifi in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from httpx->paddlepaddle==3.3.1) (2026.6.17)
-Collecting httpcore==1.* (from httpx->paddlepaddle==3.3.1)
-  Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
-Requirement already satisfied: idna in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from httpx->paddlepaddle==3.3.1) (3.18)
-Collecting h11>=0.16 (from httpcore==1.*->httpx->paddlepaddle==3.3.1)
-  Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
-Using cached opt_einsum-3.3.0-py3-none-any.whl (65 kB)
-Using cached protobuf-7.35.1-cp310-abi3-win_amd64.whl (439 kB)
-Downloading safetensors-0.8.0-cp310-abi3-win_amd64.whl (355 kB)
-Using cached httpx-0.28.1-py3-none-any.whl (73 kB)
-Using cached httpcore-1.0.9-py3-none-any.whl (78 kB)
-Using cached h11-0.16.0-py3-none-any.whl (37 kB)
-Using cached anyio-4.14.2-py3-none-any.whl (125 kB)
-Installing collected packages: safetensors, protobuf, opt-einsum, h11, anyio, httpcore, httpx, paddlepaddle
-Successfully installed anyio-4.14.2 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 opt-einsum-3.3.0 paddlepaddle-3.3.1 protobuf-7.35.1 safetensors-0.8.0
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations> python -c "import paddle; print(paddle.__version__)"
-INFO: Could not find files for the given pattern(s).
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
-  warnings.warn(warning_message)
-3.3.1
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations> pip install paddleocr
-Collecting paddleocr
-  Downloading paddleocr-3.7.0-py3-none-any.whl.metadata (28 kB)
-Collecting paddlex<3.8.0,>=3.7.0 (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading paddlex-3.7.2-py3-none-any.whl.metadata (80 kB)
-Requirement already satisfied: PyYAML>=6 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddleocr) (6.0.3)
-Requirement already satisfied: requests in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddleocr) (2.34.2)
-Collecting aiohttp>=3.8.0 (from paddleocr)
-  Downloading aiohttp-3.14.3-cp311-cp311-win_amd64.whl.metadata (8.5 kB)
-Requirement already satisfied: typing-extensions>=4.12 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddleocr) (4.15.0)
-Collecting aistudio-sdk>=0.3.5 (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading aistudio_sdk-0.3.9-py3-none-any.whl.metadata (1.2 kB)
-Collecting chardet (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading chardet-7.6.0-cp311-cp311-win_amd64.whl.metadata (9.6 kB)
-Collecting colorlog (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading colorlog-6.12.0-py3-none-any.whl.metadata (11 kB)
-Requirement already satisfied: filelock in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (3.29.0)
-Collecting huggingface-hub (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading huggingface_hub-1.27.0-py3-none-any.whl.metadata (16 kB)
-Collecting modelscope>=1.28.0 (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading modelscope-1.39.1-py3-none-any.whl.metadata (43 kB)
-Collecting numpy<2.4,>=1.24 (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading numpy-2.3.5-cp311-cp311-win_amd64.whl.metadata (60 kB)
-Requirement already satisfied: packaging in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (26.0)
-Collecting pandas>=1.3 (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading pandas-3.0.5-cp311-cp311-win_amd64.whl.metadata (19 kB)
-Requirement already satisfied: pillow in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (12.2.0)
-Collecting prettytable (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading prettytable-3.18.0-py3-none-any.whl.metadata (37 kB)
-Collecting py-cpuinfo (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached py_cpuinfo-9.0.0-py3-none-any.whl.metadata (794 bytes)
-Collecting pydantic>=2 (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
-Collecting PyYAML>=6 (from paddleocr)
-  Downloading PyYAML-6.0.2-cp311-cp311-win_amd64.whl.metadata (2.1 kB)
-Collecting ruamel.yaml (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached ruamel_yaml-0.19.1-py3-none-any.whl.metadata (16 kB)
-Collecting ujson (from paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading ujson-5.13.0-cp311-cp311-win_amd64.whl.metadata (10 kB)
-Collecting imagesize (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading imagesize-2.0.0-py2.py3-none-any.whl.metadata (1.5 kB)
-Collecting opencv-contrib-python==4.10.0.84 (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached opencv_contrib_python-4.10.0.84-cp37-abi3-win_amd64.whl.metadata (20 kB)
-Collecting pyclipper (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading pyclipper-1.4.0-cp311-cp311-win_amd64.whl.metadata (8.8 kB)
-Collecting pypdfium2>=4 (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading pypdfium2-5.13.0-py3-none-win_amd64.whl.metadata (67 kB)
-Collecting python-bidi (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading python_bidi-0.6.11-cp311-cp311-win_amd64.whl.metadata (5.4 kB)
-Collecting shapely (from paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading shapely-2.1.2-cp311-cp311-win_amd64.whl.metadata (7.1 kB)
-Collecting aiohappyeyeballs>=2.5.0 (from aiohttp>=3.8.0->paddleocr)
-  Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl.metadata (5.9 kB)
-Collecting aiosignal>=1.4.0 (from aiohttp>=3.8.0->paddleocr)
-  Using cached aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
-Collecting attrs>=17.3.0 (from aiohttp>=3.8.0->paddleocr)
-  Using cached attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
-Collecting frozenlist>=1.1.1 (from aiohttp>=3.8.0->paddleocr)
-  Downloading frozenlist-1.8.0-cp311-cp311-win_amd64.whl.metadata (21 kB)
-Collecting multidict<7.0,>=4.5 (from aiohttp>=3.8.0->paddleocr)
-  Downloading multidict-6.7.1-cp311-cp311-win_amd64.whl.metadata (5.5 kB)
-Collecting propcache>=0.2.0 (from aiohttp>=3.8.0->paddleocr)
-  Downloading propcache-0.5.2-cp311-cp311-win_amd64.whl.metadata (17 kB)
-Collecting yarl<2.0,>=1.17.0 (from aiohttp>=3.8.0->paddleocr)
-  Downloading yarl-1.24.5-cp311-cp311-win_amd64.whl.metadata (107 kB)
-Requirement already satisfied: idna>=2.0 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from yarl<2.0,>=1.17.0->aiohttp>=3.8.0->paddleocr) (3.18)
-Requirement already satisfied: psutil in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (7.2.2)
-Collecting tqdm (from aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading tqdm-4.70.0-py3-none-any.whl.metadata (57 kB)
-Collecting bce-python-sdk (from aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading bce_python_sdk-0.9.76-py3-none-any.whl.metadata (558 bytes)
-Collecting click (from aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached click-8.4.2-py3-none-any.whl.metadata (2.6 kB)
-Collecting modelscope-hub>=0.2.0 (from modelscope>=1.28.0->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading modelscope_hub-0.2.0-py3-none-any.whl.metadata (32 kB)
-Requirement already satisfied: setuptools in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from modelscope>=1.28.0->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (82.0.1)
-Requirement already satisfied: urllib3>=1.26 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from modelscope>=1.28.0->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (2.7.0)
-Requirement already satisfied: python-dateutil>=2.8.2 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from pandas>=1.3->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (2.9.0.post0)
-Collecting tzdata (from pandas>=1.3->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached tzdata-2026.3-py2.py3-none-any.whl.metadata (1.4 kB)
-Collecting annotated-types>=0.6.0 (from pydantic>=2->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
-Collecting pydantic-core==2.46.4 (from pydantic>=2->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading pydantic_core-2.46.4-cp311-cp311-win_amd64.whl.metadata (6.7 kB)
-Collecting typing-inspection>=0.4.2 (from pydantic>=2->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
-Requirement already satisfied: six>=1.5 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from python-dateutil>=2.8.2->pandas>=1.3->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (1.17.0)
-Requirement already satisfied: charset_normalizer<4,>=2 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from requests->paddleocr) (3.4.9)
-Requirement already satisfied: certifi>=2023.5.7 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from requests->paddleocr) (2026.6.17)
-Collecting colorama (from tqdm->aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)
-Collecting pycryptodome>=3.8.0 (from bce-python-sdk->aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached pycryptodome-3.23.0-cp37-abi3-win_amd64.whl.metadata (3.5 kB)
-Collecting future>=0.6.0 (from bce-python-sdk->aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Using cached future-1.0.0-py3-none-any.whl.metadata (4.0 kB)
-Collecting crc32c>=2.2.post0 (from bce-python-sdk->aistudio-sdk>=0.3.5->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading crc32c-2.8-cp311-cp311-win_amd64.whl.metadata (8.0 kB)
-Requirement already satisfied: fsspec>=2023.5.0 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from huggingface-hub->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (2026.4.0)
-Collecting hf-xet<2.0.0,>=1.5.2 (from huggingface-hub->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading hf_xet-1.6.0-cp38-abi3-win_amd64.whl.metadata (4.9 kB)
-Requirement already satisfied: httpx<1,>=0.23.0 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from huggingface-hub->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (0.28.1)
-Requirement already satisfied: anyio in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (4.14.2)
-Requirement already satisfied: httpcore==1.* in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (1.0.9)
-Requirement already satisfied: h11>=0.16 in C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages (from httpcore==1.*->httpx<1,>=0.23.0->huggingface-hub->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr) (0.16.0)
-Collecting wcwidth>=0.3.5 (from prettytable->paddlex<3.8.0,>=3.7.0->paddlex[ocr-core]<3.8.0,>=3.7.0->paddleocr)
-  Downloading wcwidth-0.8.2-py3-none-any.whl.metadata (43 kB)
-Downloading paddleocr-3.7.0-py3-none-any.whl (146 kB)
-Downloading paddlex-3.7.2-py3-none-any.whl (2.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.2/2.2 MB 4.9 MB/s  0:00:00
-Downloading PyYAML-6.0.2-cp311-cp311-win_amd64.whl (161 kB)
-Downloading numpy-2.3.5-cp311-cp311-win_amd64.whl (13.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.1/13.1 MB 3.3 MB/s  0:00:03
-Using cached opencv_contrib_python-4.10.0.84-cp37-abi3-win_amd64.whl (45.5 MB)
-Downloading aiohttp-3.14.3-cp311-cp311-win_amd64.whl (481 kB)
-Downloading multidict-6.7.1-cp311-cp311-win_amd64.whl (45 kB)
-Downloading yarl-1.24.5-cp311-cp311-win_amd64.whl (97 kB)
-Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl (15 kB)
-Using cached aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
-Downloading aistudio_sdk-0.3.9-py3-none-any.whl (67 kB)
-Using cached attrs-26.1.0-py3-none-any.whl (67 kB)
-Downloading frozenlist-1.8.0-cp311-cp311-win_amd64.whl (44 kB)
-Downloading modelscope-1.39.1-py3-none-any.whl (6.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.0/6.0 MB 6.0 MB/s  0:00:01
-Downloading modelscope_hub-0.2.0-py3-none-any.whl (156 kB)
-Downloading pandas-3.0.5-cp311-cp311-win_amd64.whl (10.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.0/10.0 MB 2.7 MB/s  0:00:03
-Downloading propcache-0.5.2-cp311-cp311-win_amd64.whl (42 kB)
-Using cached pydantic-2.13.4-py3-none-any.whl (472 kB)
-Downloading pydantic_core-2.46.4-cp311-cp311-win_amd64.whl (2.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 5.0 MB/s  0:00:00
-Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
-Downloading pypdfium2-5.13.0-py3-none-win_amd64.whl (3.9 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.9/3.9 MB 1.7 MB/s  0:00:03
-Downloading tqdm-4.70.0-py3-none-any.whl (80 kB)
-Downloading typing_inspection-0.4.4-py3-none-any.whl (14 kB)
-Downloading bce_python_sdk-0.9.76-py3-none-any.whl (435 kB)
-Downloading crc32c-2.8-cp311-cp311-win_amd64.whl (66 kB)
-Using cached future-1.0.0-py3-none-any.whl (491 kB)
-Using cached pycryptodome-3.23.0-cp37-abi3-win_amd64.whl (1.8 MB)
-Downloading chardet-7.6.0-cp311-cp311-win_amd64.whl (1.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 2.9 MB/s  0:00:00
-Using cached click-8.4.2-py3-none-any.whl (119 kB)
-Using cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)
-Downloading colorlog-6.12.0-py3-none-any.whl (12 kB)
-Downloading huggingface_hub-1.27.0-py3-none-any.whl (784 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 784.9/784.9 kB 2.6 MB/s  0:00:00
-Downloading hf_xet-1.6.0-cp38-abi3-win_amd64.whl (4.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.0/4.0 MB 3.2 MB/s  0:00:01
-Downloading imagesize-2.0.0-py2.py3-none-any.whl (9.4 kB)
-Downloading prettytable-3.18.0-py3-none-any.whl (37 kB)
-Downloading wcwidth-0.8.2-py3-none-any.whl (323 kB)
-Using cached py_cpuinfo-9.0.0-py3-none-any.whl (22 kB)
-Downloading pyclipper-1.4.0-cp311-cp311-win_amd64.whl (104 kB)
-Downloading python_bidi-0.6.11-cp311-cp311-win_amd64.whl (163 kB)
-Using cached ruamel_yaml-0.19.1-py3-none-any.whl (118 kB)
-Downloading shapely-2.1.2-cp311-cp311-win_amd64.whl (1.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.7/1.7 MB 3.0 MB/s  0:00:00
-Using cached tzdata-2026.3-py2.py3-none-any.whl (348 kB)
-Downloading ujson-5.13.0-cp311-cp311-win_amd64.whl (40 kB)
-Installing collected packages: py-cpuinfo, wcwidth, ujson, tzdata, typing-inspection, ruamel.yaml, PyYAML, python-bidi, pypdfium2, pydantic-core, pycryptodome, pyclipper, propcache, numpy, multidict, imagesize, hf-xet, future, frozenlist, crc32c, colorama, chardet, attrs, annotated-types, aiohappyeyeballs, yarl, tqdm, shapely, pydantic, prettytable, pandas, opencv-contrib-python, colorlog, click, bce-python-sdk, aiosignal, modelscope-hub, huggingface-hub, aistudio-sdk, aiohttp, modelscope, paddlex, paddleocr
-  Attempting uninstall: PyYAML
-    Found existing installation: PyYAML 6.0.3
-    Uninstalling PyYAML-6.0.3:
-      Successfully uninstalled PyYAML-6.0.3
-  Attempting uninstall: numpy
-    Found existing installation: numpy 2.4.4
-    Uninstalling numpy-2.4.4:
-      Successfully uninstalled numpy-2.4.4
-Successfully installed PyYAML-6.0.2 aiohappyeyeballs-2.7.1 aiohttp-3.14.3 aiosignal-1.4.0 aistudio-sdk-0.3.9 annotated-types-0.8.0 attrs-26.1.0 bce-python-sdk-0.9.76 chardet-7.6.0 click-8.4.2 colorama-0.4.6 colorlog-6.12.0 crc32c-2.8 frozenlist-1.8.0 future-1.0.0 hf-xet-1.6.0 huggingface-hub-1.27.0 imagesize-2.0.0 modelscope-1.39.1 modelscope-hub-0.2.0 multidict-6.7.1 numpy-2.3.5 opencv-contrib-python-4.10.0.84 paddleocr-3.7.0 paddlex-3.7.2 pandas-3.0.5 prettytable-3.18.0 propcache-0.5.2 py-cpuinfo-9.0.0 pyclipper-1.4.0 pycryptodome-3.23.0 pydantic-2.13.4 pydantic-core-2.46.4 pypdfium2-5.13.0 python-bidi-0.6.11 ruamel.yaml-0.19.1 shapely-2.1.2 tqdm-4.70.0 typing-inspection-0.4.4 tzdata-2026.3 ujson-5.13.0 wcwidth-0.8.2 yarl-1.24.5
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations> python -c "import paddle; paddle.utils.run_check()"
-INFO: Could not find files for the given pattern(s).
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
-  warnings.warn(warning_message)
-Running verify PaddlePaddle program ...
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\pir\math_op_patch.py:241: UserWarning: Tensor do not have 'place' interface for pir graph mode, try not to use it. None will be returned.
-  warnings.warn(
-I0817 16:29:30.281266   608 pir_interpreter.cc:1529] New Executor is Running ...
-I0817 16:29:30.285408   608 pir_interpreter.cc:1552] pir interpreter is running by multi-thread mode ...
-PaddlePaddle works well on 1 CPU.
-PaddlePaddle is installed successfully! Let's start deep learning with PaddlePaddle now.
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations> python -c "import paddle; print(paddle.__version__); print(paddle.device.is_compiled_with_cuda()); print(paddle.device.get_device())"
-INFO: Could not find files for the given pattern(s).
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
-  warnings.warn(warning_message)
-3.3.1
-False
-cpu
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations> nvcc --version
-nvcc: NVIDIA (R) Cuda compiler driver
-Copyright (c) 2005-2024 NVIDIA Corporation
-Built on Fri_Jun_14_16:44:19_Pacific_Daylight_Time_2024
-Cuda compilation tools, release 12.6, V12.6.20
-Build cuda_12.6.r12.6/compiler.34431801_0
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations>
+```powershell
+pip install paddleocr
+```
 
+In the recorded setup this installed:
 
+- `paddleocr==3.7.0`
+- `paddlex==3.7.2`
 
+Check them:
 
+```powershell
+python -c "import paddleocr; print('PaddleOCR import OK')"
+python -c "import paddlex; print('PaddleX:', paddlex.__version__)"
+```
 
+If OCR pipeline dependencies are missing, install the OCR extras explicitly:
 
+```powershell
+pip install "paddlex[ocr]==3.7.2"
+```
 
+Then verify again:
 
+```powershell
+python -c "import paddle; paddle.utils.run_check()"
+python -c "import paddlex; print(paddlex.__version__)"
+```
 
+---
 
+## 6. Install PPOCRLabel
 
+Install the GUI annotation application:
 
-
-
-
-
-
-
-# Install PPOCRLabel (the GUI tool)
+```powershell
 pip install PPOCRLabel
+```
 
-# Verify
+Check whether the command is available:
+
+```powershell
 PPOCRLabel --help
+```
 
+You can also check the installed package:
 
+```powershell
+pip show PPOCRLabel
+```
+
+---
+
+# 7. How to Open the PPOCRLabel GUI
+
+Always activate the environment first:
+
+```powershell
+conda activate paddle_label_cpu
+```
+
+If you kept the original environment:
+
+```powershell
+conda activate yolo_gemma
+```
+
+### Method A — normal launcher
+
+Try this first:
+
+```powershell
+PPOCRLabel
+```
+
+### Method B — launch through Python
+
+If the executable is not found or does not start correctly:
+
+```powershell
+python -c "from PPOCRLabel.PPOCRLabel import main; main()"
+```
+
+### Method C — launch with the required OCR models
+
+For this BIB project:
+
+```powershell
 python -c "from PPOCRLabel.PPOCRLabel import main; main()" --lang en --det_model_name PP-OCRv5_mobile_det --rec_model_name korean_PP-OCRv5_mobile_rec
+```
 
-OSError: [WinError 127] The specified procedure could not be found. Error loading "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\torch\lib\shm.dll" or one of its dependencies.
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations\dataset-2026>
+This configuration is intended to use:
 
-  import modelscope
-  File "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\modelscope\__init__.py", line 5, in <module>
-    from modelscope.utils.import_utils import (LazyImportModule,
-  File "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\modelscope\utils\import_utils.py", line 23, in <module>
-    from modelscope.utils.ast_utils import (INDEX_KEY, MODULE_KEY, REQUIREMENT_KEY,
-  File "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\modelscope\utils\ast_utils.py", line 23, in <module>
-    from modelscope.utils.file_utils import get_modelscope_cache_dir
-  File "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\modelscope\utils\file_utils.py", line 13, in <module>
-    logger = get_logger()
+- Detection: `PP-OCRv5_mobile_det`
+- Recognition: `korean_PP-OCRv5_mobile_rec`
 
+If PowerShell/Qt has a plugin-path problem, set the Qt plugin directory before launching:
 
-<!--  -->
-we edit models files
+```powershell
+$env:QT_QPA_PLATFORM_PLUGIN_PATH="$env:CONDA_PREFIX\Lib\site-packages\PyQt5\Qt5\plugins"
+```
 
-# before
+Then run the GUI again:
+
+```powershell
+PPOCRLabel
+```
+
+or the Python launcher above.
+
+Using `$env:CONDA_PREFIX` is better than hard-coding a username or Conda installation path.
+
+---
+
+# 8. Opening the Image Dataset in the GUI
+
+After PPOCRLabel opens:
+
+1. Open the directory containing the cropped BIB images.
+2. Select an image.
+3. Run automatic OCR/detection if required.
+4. Inspect every detected text bounding box.
+5. Delete boxes for sponsor text, logos, event text, noise, or unrelated text.
+6. Keep the bounding box for the **BIB number**.
+7. Keep the bounding box for the **Korean/English athlete name**.
+8. Correct OCR text manually when recognition is wrong.
+9. Save the annotation.
+10. Move to the next image.
+
+Do not blindly trust auto-labeling. The final annotations should contain only the text classes/content required by the BIB OCR project.
+
+---
+
+# 9. Expected Annotation Output
+
+The project requires two related outputs.
+
+### Detection data
+
+The original image is retained with text bounding-box annotations. These annotations are used to train or fine-tune the text detection model.
+
+Conceptually:
+
+```text
+image_001.jpg
+    +-- BIB-number bounding box
+    +-- athlete-name bounding box
+```
+
+### Recognition data
+
+The selected text regions are cropped and paired with their correct transcription.
+
+Conceptually:
+
+```text
+rec/
+├── image_001_crop_0.jpg   -> 5090
+└── image_001_crop_1.jpg   -> 김동현
+```
+
+The exact filenames and label files are generated by PPOCRLabel according to its export/save behavior.
+
+---
+
+# 10. Recommended Annotation Rules
+
+For this dataset, keep the labels consistent.
+
+```text
+KEEP:
+✓ BIB/race number
+✓ Korean athlete name
+✓ English athlete name when it is part of the required target
+
+REMOVE:
+✗ sponsor names
+✗ event branding
+✗ logos
+✗ small unrelated numbers
+✗ clothing text
+✗ background signs
+✗ duplicate/incorrect OCR boxes
+✗ text belonging to another target when the crop is intended for one athlete
+```
+
+Before saving, check that the box tightly covers the text and that the transcription exactly matches the visible text.
+
+---
+
+# 11. Problems Encountered and Fixes
+
+## Issue 1 — Paddle GPU build is unsuitable for the old GPU
+
+### Symptom
+
+CUDA 12.6 is installed, but the intended Paddle GPU setup cannot be used reliably on the machine.
+
+### Fix
+
+Use the CPU build:
+
+```powershell
+pip uninstall paddlepaddle-gpu -y
+pip install paddlepaddle==3.3.1
+```
+
+Confirm:
+
+```powershell
+python -c "import paddle; print(paddle.device.is_compiled_with_cuda()); print(paddle.device.get_device())"
+```
+
+Expected:
+
+```text
+False
+cpu
+```
+
+For labeling, CPU inference is acceptable even though it is slower.
+
+---
+
+## Issue 2 — `ccache` warning
+
+Example:
+
+```text
+UserWarning: No ccache found.
+```
+
+### Meaning
+
+This is normally a warning, not a Paddle installation failure.
+
+### Action
+
+If `paddle.utils.run_check()` finishes successfully, continue. `ccache` is mainly relevant when native source files need recompilation.
+
+---
+
+## Issue 3 — PIR warning about `place`
+
+Example:
+
+```text
+Tensor do not have 'place' interface for pir graph mode
+```
+
+### Action
+
+If the final Paddle check says that PaddlePaddle works successfully, this warning can generally be ignored for this setup.
+
+---
+
+## Issue 4 — `WinError 127` loading `torch\lib\shm.dll`
+
+Observed error:
+
+```text
+OSError: [WinError 127] The specified procedure could not be found.
+Error loading "...site-packages\torch\lib\shm.dll" or one of its dependencies.
+```
+
+### Likely cause
+
+This points to a Torch/native DLL dependency problem inside the environment. It can occur when the environment contains incompatible Torch/CUDA/native-library versions.
+
+### Best fix
+
+Do not mix this annotation setup with an existing YOLO/Gemma/Torch environment unless necessary. Create a clean CPU labeling environment:
+
+```powershell
+conda create -n paddle_label_cpu python=3.11 -y
+conda activate paddle_label_cpu
+pip install paddlepaddle==3.3.1
+pip install paddleocr
+pip install PPOCRLabel
+```
+
+Then retry PPOCRLabel before adding unrelated PyTorch packages.
+
+If Torch is not needed by your annotation workflow but was inherited from another project, the clean environment avoids the DLL conflict rather than patching around it.
+
+---
+
+## Issue 5 — ModelScope import crashes PPOCRLabel/PaddleX
+
+The recorded traceback entered:
+
+```text
+modelscope
+modelscope.utils.import_utils
+modelscope.utils.ast_utils
+modelscope.utils.file_utils
+```
+
+### Temporary workaround used during debugging
+
+The PaddleX file was located with:
+
+```powershell
+python -c "import paddlex, os; print(os.path.join(os.path.dirname(paddlex.__file__), 'inference', 'utils', 'official_models.py'))"
+```
+
+Example location:
+
+```text
+C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddlex\inference\utils\official_models.py
+```
+
+It can be opened in VS Code:
+
+```powershell
+code "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddlex\inference\utils\official_models.py"
+```
+
+The debugging change was:
+
+```python
+# Before
 import modelscope
 
-# after
+# Temporary defensive import
 ms_hub_errors = None
 
 try:
     import modelscope
 except Exception:
     modelscope = None
+```
 
- notepad "E:\anaconda3\envs\yolo_cpu\Lib\site-packages\paddlex\inference\utils\official_models.py"
+### Important
 
- if this not opend
+Editing `site-packages` should be treated as a **last-resort workaround**, not the normal installation procedure. A package reinstall/update can overwrite the change.
 
- python -c "import paddlex, os; print(os.path.join(os.path.dirname(paddlex.__file__), 'inference', 'utils', 'official_models.py'))"
+Prefer first:
 
-we got the path
+```powershell
+pip install "paddlex[ocr]==3.7.2"
+```
 
-C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddlex\inference\utils\official_models.py
+and verify whether `modelscope` imports correctly:
 
+```powershell
+python -c "import modelscope; print('ModelScope import OK')"
+```
 
-open in vscode
+If the clean environment works, do not patch PaddleX source code.
 
-code "C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\paddlex\inference\utils\official_models.py"
+---
 
-$env:QT_QPA_PLATFORM_PLUGIN_PATH="C:\Users\Pc\miniconda3\envs\yolo_gemma\Lib\site-packages\PyQt5\Qt5\plugins"
+## Issue 6 — PaddleX pipeline dependency error
 
+Observed error:
 
-RuntimeError: A dependency error occurred during pipeline creation. Please refer to the installation documentation to ensure all required dependencies are installed.
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations\dataset-2026> python -c "import paddlex; print(paddlex.__version__)"
+```text
+RuntimeError: A dependency error occurred during pipeline creation.
+Please refer to the installation documentation to ensure all required dependencies are installed.
+```
+
+### Fix used
+
+The base `paddlex` package was present:
+
+```powershell
+python -c "import paddlex; print(paddlex.__version__)"
+```
+
+which returned:
+
+```text
 3.7.2
-(yolo_gemma) PS F:\paddleocr-finetuned\data-annotations\dataset-2026> pip install "paddlex[ocr]==3.7.2"
+```
 
+The OCR-specific extras were then installed:
 
+```powershell
+pip install "paddlex[ocr]==3.7.2"
+```
 
+After installation, close and reopen the terminal, reactivate the environment, and retry the GUI.
 
+---
 
+## Issue 7 — Qt platform plugin / GUI does not open
 
+Set the Qt plugin directory using the active Conda environment:
 
+```powershell
+$env:QT_QPA_PLATFORM_PLUGIN_PATH="$env:CONDA_PREFIX\Lib\site-packages\PyQt5\Qt5\plugins"
+```
 
+Check that it exists:
 
+```powershell
+Test-Path $env:QT_QPA_PLATFORM_PLUGIN_PATH
+```
 
+Then launch:
 
+```powershell
+PPOCRLabel
+```
 
+If the variable causes problems in a later session, remove it:
 
+```powershell
+Remove-Item Env:QT_QPA_PLATFORM_PLUGIN_PATH
+```
 
+and reopen the terminal.
 
+---
 
+## Issue 8 — `PPOCRLabel` command is not recognized
 
+First make sure the environment is active:
 
+```powershell
+conda activate paddle_label_cpu
+```
 
+Check:
 
+```powershell
+pip show PPOCRLabel
+where python
+where PPOCRLabel
+```
 
+If the launcher still cannot be found, use:
 
+```powershell
+python -c "from PPOCRLabel.PPOCRLabel import main; main()"
+```
 
+---
 
+# 12. Quick Start — Every Time You Want to Label Images
 
+Once installation is complete, you should **not reinstall everything every time**.
 
+Open **Anaconda Prompt** or **PowerShell**:
 
+```powershell
+conda activate paddle_label_cpu
+cd F:\paddleocr-finetuned\data-annotations\dataset-2026
+$env:QT_QPA_PLATFORM_PLUGIN_PATH="$env:CONDA_PREFIX\Lib\site-packages\PyQt5\Qt5\plugins"
+PPOCRLabel
+```
 
+If you use the original environment:
 
+```powershell
+conda activate yolo_gemma
+cd F:\paddleocr-finetuned\data-annotations\dataset-2026
+$env:QT_QPA_PLATFORM_PLUGIN_PATH="$env:CONDA_PREFIX\Lib\site-packages\PyQt5\Qt5\plugins"
+python -c "from PPOCRLabel.PPOCRLabel import main; main()" --lang en --det_model_name PP-OCRv5_mobile_det --rec_model_name korean_PP-OCRv5_mobile_rec
+```
 
+That is the main **daily GUI startup procedure**.
 
+---
 
+# 13. One-Time Installation vs Daily Use
 
+| Task | One time | Every session |
+|---|:---:|:---:|
+| Create Conda environment | ✓ | |
+| Install PaddlePaddle | ✓ | |
+| Install PaddleOCR/PaddleX | ✓ | |
+| Install PPOCRLabel | ✓ | |
+| Activate Conda environment | | ✓ |
+| `cd` to project/dataset | | ✓ |
+| Set Qt plugin path if required | | ✓ |
+| Open PPOCRLabel | | ✓ |
+| Open image directory | | ✓ |
+| Clean/correct annotations | | ✓ |
+| Save labels | | ✓ |
 
+---
 
+# 14. Installation Verification Checklist
 
+Run these commands before debugging the GUI itself:
 
+```powershell
+python --version
+python -c "import paddle; print('Paddle:', paddle.__version__, 'Device:', paddle.device.get_device())"
+python -c "import paddleocr; print('PaddleOCR OK')"
+python -c "import paddlex; print('PaddleX:', paddlex.__version__)"
+python -c "import modelscope; print('ModelScope OK')"
+python -c "import PyQt5; print('PyQt5 OK')"
+pip show PPOCRLabel
+```
 
+If one command fails, fix that dependency before trying to launch the entire GUI. This makes troubleshooting much easier.
 
+---
 
+# 15. Recommended Project Layout
 
+A clean dataset structure helps prevent accidental overwriting:
 
+```text
+data-annotations/
+├── README.md
+├── raw_crops/
+│   ├── event_01/
+│   └── event_02/
+├── annotation_work/
+│   └── dataset-2026/
+├── exports/
+│   ├── detection/
+│   └── recognition/
+└── backups/
+```
 
+Keep original images read-only or backed up. Do annotation work on a copied working dataset.
 
+---
 
+# 16. Recommended Backup Practice
 
+Annotation work is expensive to recreate. After every meaningful labeling session, back up:
 
+- original/current images,
+- detection annotation text files,
+- recognition label files,
+- generated recognition crops,
+- any class/dictionary/configuration files required for training.
 
+A simple dated backup naming convention is useful:
 
+```text
+backups/
+├── 2026-09-18/
+├── 2026-09-19/
+└── ...
+```
+
+---
+
+# 17. Clean Reinstallation Procedure
+
+If dependency conflicts become too complicated, rebuilding the environment is usually safer than repeatedly modifying `site-packages`.
+
+```powershell
+conda deactivate
+conda remove -n paddle_label_cpu --all -y
+
+conda create -n paddle_label_cpu python=3.11 -y
+conda activate paddle_label_cpu
+
+python -m pip install --upgrade pip
+pip install paddlepaddle==3.3.1
+pip install paddleocr
+pip install "paddlex[ocr]==3.7.2"
+pip install PPOCRLabel
+```
+
+Verify Paddle:
+
+```powershell
+python -c "import paddle; paddle.utils.run_check()"
+```
+
+Then launch PPOCRLabel.
+
+---
+
+# 18. Final Workflow Summary
+
+```text
+ONE-TIME SETUP
+Conda env
+   |
+   v
+PaddlePaddle CPU
+   |
+   v
+PaddleOCR + PaddleX OCR dependencies
+   |
+   v
+PPOCRLabel
+   |
+   v
+Verify imports
+
+EVERY LABELING SESSION
+Activate environment
+   |
+   v
+Open project directory
+   |
+   v
+Set Qt plugin path (only if needed)
+   |
+   v
+Launch PPOCRLabel GUI
+   |
+   v
+Open cropped BIB images
+   |
+   v
+Auto-detect / recognize text
+   |
+   v
+Delete unwanted boxes
+   |
+   v
+Keep BIB number + athlete name
+   |
+   v
+Correct transcription
+   |
+   v
+Save detection + recognition annotations
+   |
+   v
+Back up annotation files
+```
+
+---
+
+## Notes
+
+This README intentionally documents both the successful setup and the failures encountered during installation. In particular, it preserves the CPU fallback, the Torch `shm.dll` failure, the ModelScope/PaddleX import issue, the Qt plugin-path workaround, and the missing PaddleX OCR dependency problem so the environment can be reproduced or repaired later.
