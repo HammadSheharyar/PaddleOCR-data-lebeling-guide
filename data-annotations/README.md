@@ -234,6 +234,14 @@ PPOCRLabel
 ```
 
 ### Method B — launch through Python
+find source
+(mmpose_gpu) E:\rtmpose_model_setup-main\rtmpos\ocr_full_read_gemma>python -c "import PPOCRLabel, os; print(os.path.dirname(PPOCRLabel.__file__))"
+C:\Users\hamad\AppData\Local\miniconda3\envs\mmpose_gpu\lib\site-packages\PPOCRLabel
+then launch: this was for single digit and 2 digits labeleing
+
+python C:\Users\hamad\AppData\Local\miniconda3\envs\mmpose_gpu\lib\site-packages\PPOCRLabel\PPOCRLabel.py --lang en
+
+it will load ppocrv5 by default 
 
 If the executable is not found or does not start correctly:
 
